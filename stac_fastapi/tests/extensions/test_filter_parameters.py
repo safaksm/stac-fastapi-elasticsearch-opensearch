@@ -13,61 +13,28 @@ pytestmark = pytest.mark.asyncio
 EXPRESSION = {"op": "=", "args": [{"property": "id"}, "a"]}
 TEXT = "id = 'a'"
 JSON = orjson.dumps(EXPRESSION).decode()
-NESTED = "Invalid filter parameter: 400: "
-TEXT_ERROR = "Invalid filter parameter: expected valid CQL2 text."
+UNSUPPORTED = (
+    "Only 'cql2-json' and 'cql2-text' filter languages are supported. Got 'cql-json'."
+)
 ROUTES = ["/search", "/collections", "/aggregate", "/catalogs"]
-# The third value holds the routes that answer differently today.
 CASES = [
-    pytest.param({"filter": TEXT}, EXPRESSION, {}, id="text"),
-    pytest.param(
-        {"filter": JSON, "filter-lang": "cql2-json"}, EXPRESSION, {}, id="json"
-    ),
-    pytest.param(
-        {"filter": JSON},
-        EXPRESSION,
-        {"/search": TEXT_ERROR, "/aggregate": TEXT_ERROR},
-        id="json-without-filter-lang",
-    ),
-    pytest.param(
-        {"filter": ""},
-        None,
-        {
-            "/collections": NESTED
-            + "Error parsing filter: 400: Invalid CQL2-text filter: "
-            + "expected valid CQL2 text. Please check your syntax."
-        },
-        id="empty",
-    ),
+    pytest.param({"filter": TEXT}, EXPRESSION, id="text"),
+    pytest.param({"filter": JSON, "filter-lang": "cql2-json"}, EXPRESSION, id="json"),
+    pytest.param({"filter": JSON}, EXPRESSION, id="json-without-filter-lang"),
+    pytest.param({"filter": ""}, None, id="empty"),
     pytest.param(
         {"filter": "{", "filter-lang": "cql2-json"},
         "Invalid filter parameter: expected valid CQL2 JSON.",
-        {
-            "/collections": NESTED
-            + "Error parsing filter: unexpected end of data: line 1 column 2 (char 1)",
-            "/catalogs": "Invalid filter parameter: "
-            + "unexpected end of data: line 1 column 2 (char 1)",
-        },
         id="invalid-json",
     ),
     pytest.param(
         {"filter": "id ="},
-        TEXT_ERROR,
-        {
-            "/collections": NESTED
-            + "Error parsing filter: 400: Invalid CQL2-text filter: "
-            + "expected valid CQL2 text. Please check your syntax.",
-            "/catalogs": "Invalid filter parameter: expected valid CQL2 text",
-        },
+        "Invalid filter parameter: expected valid CQL2 text.",
         id="invalid-text",
     ),
     pytest.param(
         {"filter": "[1]", "filter-lang": "cql2-json"},
         "Invalid filter parameter: expected a CQL2 expression with an operator.",
-        {
-            "/search": "Invalid parameters provided: 1 validation error",
-            "/aggregate": "Invalid aggregation parameters.",
-            "/catalogs": "Invalid filter parameter: not a CQL2 expression",
-        },
         id="not-an-expression",
     ),
 ]
@@ -110,17 +77,16 @@ async def _get(http, route, params):
 def _check(response, expected, handed_down):
     if isinstance(expected, str):
         assert response.status_code == 400, response.text
-        assert response.json()["detail"].startswith(expected), response.text
+        assert response.json() == {"detail": expected}
     else:
         assert response.status_code == 200, response.text
         assert handed_down() == expected
 
 
 @pytest.mark.parametrize("route", ROUTES)
-@pytest.mark.parametrize("params,expected,drift", CASES)
-async def test_filter_parameters(http, handed_down, route, params, expected, drift):
+@pytest.mark.parametrize("params,expected", CASES)
+async def test_filter_parameters(http, handed_down, route, params, expected):
     """Each route turns the same parameters into the same filter, or the same 400."""
-    expected = drift.get(route, expected)
     _check(await _get(http, route, params), expected, handed_down)
 
 
@@ -128,22 +94,10 @@ async def test_filter_parameters(http, handed_down, route, params, expected, dri
     "method,data,expected",
     [
         ("GET", {"filter": TEXT}, EXPRESSION),
-        (
-            "GET",
-            {"filter": TEXT, "filter-lang": "cql-json"},
-            NESTED
-            + "Only 'cql2-json' and 'cql2-text' filter languages are supported "
-            + "for collections. Got 'cql-json'.",
-        ),
+        ("GET", {"filter": TEXT, "filter-lang": "cql-json"}, UNSUPPORTED),
         ("POST", {"filter": EXPRESSION}, EXPRESSION),
         ("POST", {"filter": TEXT}, EXPRESSION),
-        (
-            "POST",
-            {"filter": EXPRESSION, "filter-lang": "cql-json"},
-            NESTED
-            + "Only 'cql2-json' and 'cql2-text' filter languages are supported "
-            + "for collections. Got 'cql-json'.",
-        ),
+        ("POST", {"filter": EXPRESSION, "filter-lang": "cql-json"}, UNSUPPORTED),
     ],
 )
 async def test_collections_search_filter(http, handed_down, method, data, expected):
@@ -164,5 +118,4 @@ async def test_parser_failure_is_a_server_error(http, monkeypatch, route):
 
     monkeypatch.setattr(cql2, "parse_text", fail)
     response = await _get(http, route, {"filter": TEXT})
-    expected = 400 if route in ("/collections", "/catalogs") else 500
-    assert response.status_code == expected, response.text
+    assert response.status_code == 500, response.text

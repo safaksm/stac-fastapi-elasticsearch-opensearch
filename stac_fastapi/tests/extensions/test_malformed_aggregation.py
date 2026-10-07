@@ -9,6 +9,7 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from pydantic import ValidationError
 
+from stac_fastapi.core import utilities
 from stac_fastapi.core.extensions.filter import CQL2TextError
 from stac_fastapi.sfeos_helpers.aggregation import client as aggregation
 
@@ -248,10 +249,10 @@ async def test_server_failures_propagate(
     if stage in {"parser", "generated-json"}:
         params["filter"] = f"id = '{ctx.item['id']}'"
         if stage == "parser":
-            monkeypatch.setattr(aggregation, "cql2_text_to_json", fail)
+            monkeypatch.setattr(utilities, "cql2_text_to_json", fail)
         else:
             monkeypatch.setattr(
-                aggregation, "cql2_text_to_json", lambda text: orjson.loads("{")
+                utilities, "cql2_text_to_json", lambda text: orjson.loads("{")
             )
             error = orjson.JSONDecodeError("generated", "{", 0)
     else:

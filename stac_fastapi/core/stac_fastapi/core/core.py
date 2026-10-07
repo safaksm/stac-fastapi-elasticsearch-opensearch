@@ -25,7 +25,6 @@ from stac_fastapi.core.base_database_logic import BaseDatabaseLogic
 from stac_fastapi.core.base_settings import ApiBaseSettings
 from stac_fastapi.core.datetime_utils import format_datetime_range
 from stac_fastapi.core.exceptions import QueuedSuccess
-from stac_fastapi.core.extensions.filter import CQL2TextError, cql2_text_to_json
 from stac_fastapi.core.models.links import PagingLinks
 from stac_fastapi.core.queryables import (
     QueryablesCache,
@@ -46,6 +45,7 @@ from stac_fastapi.core.utilities import (
     get_bool_env,
     get_int_env,
     json_merge_patch,
+    parse_cql2_filter,
 )
 from stac_fastapi.core.validate import (
     async_validate_batch_with_stac_validator,
@@ -474,64 +474,7 @@ class CoreClient(AsyncBaseCoreClient):
                     detail="Invalid query parameter: expected a JSON object of operator objects.",
                 )
 
-        # Parse the filter parameter if provided
-        parsed_filter = None
-        if filter_expr is not None:
-            try:
-                # Only raise an error for explicitly unsupported filter languages
-                if filter_lang is not None and filter_lang not in [
-                    "cql2-json",
-                    "cql2-text",
-                ]:
-                    # Raise an error for unsupported filter languages
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Only 'cql2-json' and 'cql2-text' filter languages are supported for collections. Got '{filter_lang}'.",
-                    )
-
-                # Handle different filter formats
-                try:
-                    # If filter_expr is already a dict (from POST request body), use it directly
-                    if isinstance(filter_expr, dict):
-                        parsed_filter = filter_expr
-                    elif filter_lang == "cql2-text" or filter_lang is None:
-                        # For cql2-text or when no filter_lang is specified, try both formats
-                        # Query params are already percent-decoded by Starlette;
-                        # decoding again corrupts CQL2 LIKE patterns like "%banks%"
-                        # ("%ba" is a valid escape).
-                        try:
-                            # First try to parse as JSON
-                            parsed_filter = orjson.loads(filter_expr)
-                        except Exception:
-                            # If that fails, convert CQL2-text to CQL2-JSON
-                            try:
-                                parsed_filter = cql2_text_to_json(filter_expr)
-                            except Exception as e:
-                                # If parsing fails, provide a helpful error message
-                                raise HTTPException(
-                                    status_code=400,
-                                    detail=f"Invalid CQL2-text filter: {e}. Please check your syntax.",
-                                )
-                    else:
-                        # Explicit cql2-json: already percent-decoded (see note above).
-                        parsed_filter = orjson.loads(filter_expr)
-                except Exception as e:
-                    # Catch any other parsing errors
-                    raise HTTPException(
-                        status_code=400, detail=f"Error parsing filter: {e}"
-                    )
-
-            except Exception as e:
-                raise HTTPException(
-                    status_code=400, detail=f"Invalid filter parameter: {e}"
-                )
-            # The translator needs an operator: a bare TRUE or FALSE, or JSON that is
-            # not an object, would be ignored or fail in the database layer.
-            if not isinstance(parsed_filter, dict):
-                raise HTTPException(
-                    status_code=400,
-                    detail="Invalid filter parameter: expected a CQL2 expression with an operator.",
-                )
+        parsed_filter = parse_cql2_filter(filter_expr, filter_lang)
 
         parsed_datetime = None
         if datetime:
@@ -868,23 +811,7 @@ class CoreClient(AsyncBaseCoreClient):
 
         if filter_expr:
             base_args["filter_lang"] = "cql2-json"
-            # Already percent-decoded by Starlette; decoding again would corrupt
-            # CQL2 LIKE patterns like "%banks%" ("%ba" is a valid escape).
-            if filter_lang == "cql2-json":
-                try:
-                    base_args["filter"] = orjson.loads(filter_expr)
-                except orjson.JSONDecodeError:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Invalid filter parameter: expected valid CQL2 JSON.",
-                    )
-            else:
-                try:
-                    base_args["filter"] = cql2_text_to_json(filter_expr)
-                except CQL2TextError as e:
-                    raise HTTPException(
-                        status_code=400, detail=f"Invalid filter parameter: {e}."
-                    )
+            base_args["filter"] = parse_cql2_filter(filter_expr, filter_lang)
 
         if fields:
             includes, excludes = set(), set()

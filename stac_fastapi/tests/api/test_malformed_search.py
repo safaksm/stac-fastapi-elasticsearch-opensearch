@@ -11,7 +11,7 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from stac_fastapi.core import core
+from stac_fastapi.core import core, utilities
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.datetime_filtering]
 
@@ -219,7 +219,7 @@ async def test_unrelated_failures_propagate(
         def fail(*args, **kwargs):
             raise error
 
-        monkeypatch.setattr(core, target, fail)
+        monkeypatch.setattr(utilities, target, fail)
     params = {"filter": f"id = '{item['id']}'"}
     with pytest.raises(type(error)) as raised:
         await catalogs_app_client.get(routes["global"], params=params)
@@ -237,7 +237,7 @@ async def test_generated_json_failure_propagates(
 ):
     """A JSON error inside the CQL2 text conversion is not raw client JSON."""
     routes, _ = search_scope
-    monkeypatch.setattr(core, "cql2_text_to_json", lambda text: orjson.loads("{"))
+    monkeypatch.setattr(utilities, "cql2_text_to_json", lambda text: orjson.loads("{"))
     with pytest.raises(orjson.JSONDecodeError):
         await catalogs_app_client.get(routes["global"], params={"filter": "id = 'a'"})
 

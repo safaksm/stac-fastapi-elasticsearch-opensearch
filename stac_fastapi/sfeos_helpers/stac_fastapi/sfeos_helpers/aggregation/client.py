@@ -14,8 +14,8 @@ from stac_fastapi.core.base_database_logic import BaseDatabaseLogic
 from stac_fastapi.core.base_settings import ApiBaseSettings
 from stac_fastapi.core.datetime_utils import format_datetime_range
 from stac_fastapi.core.extensions.aggregation import EsAggregationExtensionPostRequest
-from stac_fastapi.core.extensions.filter import CQL2TextError, cql2_text_to_json
 from stac_fastapi.core.session import Session
+from stac_fastapi.core.utilities import parse_cql2_filter
 from stac_fastapi.extensions.aggregation.client import AsyncBaseAggregationClient
 from stac_fastapi.extensions.aggregation.types import Aggregation, AggregationCollection
 from stac_fastapi.types.rfc3339 import DateTimeType
@@ -194,45 +194,6 @@ class EsAsyncBaseAggregationClient(AsyncBaseAggregationClient):
         else:
             return self.DEFAULT_DATETIME_INTERVAL
 
-    def get_filter(self, filter, filter_lang):
-        """Format the filter parameter in cql2-json or cql2-text.
-
-        Args:
-            filter: The filter expression
-            filter_lang: The filter language (cql2-json or cql2-text)
-
-        Returns:
-            dict: A formatted filter expression
-
-        Raises:
-            HTTPException: If the filter language is not supported
-        """
-        if filter_lang == "cql2-text":
-            try:
-                return cql2_text_to_json(filter)
-            except CQL2TextError as e:
-                raise HTTPException(
-                    status_code=400, detail=f"Invalid filter parameter: {e}."
-                )
-        elif filter_lang == "cql2-json":
-            if isinstance(filter, str):
-                # Already percent-decoded by Starlette; decoding again would corrupt
-                # CQL2 LIKE patterns like "%banks%" ("%ba" is a valid escape).
-                try:
-                    return orjson.loads(filter)
-                except orjson.JSONDecodeError:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Invalid filter parameter: expected valid CQL2 JSON.",
-                    )
-            else:
-                return filter
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unknown filter-lang: {filter_lang}. Only cql2-json or cql2-text are supported.",
-            )
-
     async def aggregate(
         self,
         aggregate_request: EsAggregationExtensionPostRequest | None = None,
@@ -290,7 +251,7 @@ class EsAsyncBaseAggregationClient(AsyncBaseAggregationClient):
                 base_args["datetime"] = format_datetime_range(datetime)
 
             if filter_expr:
-                base_args["filter"] = self.get_filter(filter_expr, filter_lang)
+                base_args["filter"] = parse_cql2_filter(filter_expr, filter_lang)
             try:
                 aggregate_request = EsAggregationExtensionPostRequest(**base_args)
             except ValidationError:
@@ -301,12 +262,6 @@ class EsAsyncBaseAggregationClient(AsyncBaseAggregationClient):
             # Workaround for optional path param in POST requests
             if "collections" in path:
                 collection_id = path.split("/")[2]
-
-            filter_lang = "cql2-json"
-            if aggregate_request.filter_expr:
-                aggregate_request.filter_expr = self.get_filter(
-                    aggregate_request.filter_expr, filter_lang
-                )
 
         if collection_id:
             if aggregate_request.collections:

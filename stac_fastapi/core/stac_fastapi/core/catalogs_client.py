@@ -6,7 +6,6 @@ from typing import Any, List, Literal, Set
 from urllib.parse import urlencode
 
 import attr
-import orjson
 from fastapi import HTTPException, Request
 from stac_fastapi_catalogs_extension.client import (
     AsyncBaseCatalogsClient,
@@ -21,51 +20,18 @@ from stac_pydantic.item_collection import ItemCollection
 from starlette.responses import JSONResponse, Response
 
 from stac_fastapi.core.base_database_logic import BaseDatabaseLogic
-from stac_fastapi.core.extensions.filter import cql2_text_to_json
 from stac_fastapi.core.queryables import get_properties_from_cql2_filter
 from stac_fastapi.core.serializers import (
     CatalogSerializer,
     CollectionSerializer,
     ItemSerializer,
 )
+from stac_fastapi.core.utilities import parse_cql2_filter
 from stac_fastapi.sfeos_helpers.mappings import COLLECTIONS_INDEX
 from stac_fastapi.types.errors import ConflictError, NotFoundError
 from stac_fastapi.types.search import BaseSearchPostRequest
 
 logger = logging.getLogger(__name__)
-
-
-def _parse_cql2_filter(
-    filter_expr: str | None, filter_lang: str | None
-) -> dict[str, Any] | None:
-    """Parse a `filter` parameter into CQL2 JSON, as the collections route does.
-
-    Raises:
-        HTTPException: 400 if the language is not supported or the filter does not parse.
-    """
-    if not filter_expr:
-        return None
-    if filter_lang not in (None, "cql2-text", "cql2-json"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Only 'cql2-json' and 'cql2-text' filter languages are supported. Got '{filter_lang}'.",
-        )
-    try:
-        if filter_lang == "cql2-json":
-            parsed = orjson.loads(filter_expr)
-        else:
-            # Like the collections route, cql2-text also accepts a JSON filter.
-            try:
-                parsed = orjson.loads(filter_expr)
-            except orjson.JSONDecodeError:
-                parsed = cql2_text_to_json(filter_expr)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid filter parameter: {e}")
-    if not isinstance(parsed, dict):
-        raise HTTPException(
-            status_code=400, detail="Invalid filter parameter: not a CQL2 expression"
-        )
-    return parsed
 
 
 @attr.s
@@ -162,7 +128,7 @@ class CatalogsClient(AsyncBaseCatalogsClient, AsyncCatalogsSearchClient):
             limit=limit,
             request=request,
             sort=[{"field": "id", "direction": "asc"}],
-            filter=_parse_cql2_filter(filter_expr, filter_lang),
+            filter=parse_cql2_filter(filter_expr, filter_lang),
         )
 
         base_url = self._get_base_url(request)
@@ -589,7 +555,7 @@ class CatalogsClient(AsyncBaseCatalogsClient, AsyncCatalogsSearchClient):
             limit=limit,
             token=token,
             request=request,
-            filter=_parse_cql2_filter(filter_expr, filter_lang),
+            filter=parse_cql2_filter(filter_expr, filter_lang),
         )
 
         collections = [
@@ -669,7 +635,7 @@ class CatalogsClient(AsyncBaseCatalogsClient, AsyncCatalogsSearchClient):
             limit=limit,
             token=token,
             request=request,
-            filter=_parse_cql2_filter(filter_expr, filter_lang),
+            filter=parse_cql2_filter(filter_expr, filter_lang),
         )
 
         base_url = self._get_base_url(request)
@@ -1156,7 +1122,7 @@ class CatalogsClient(AsyncBaseCatalogsClient, AsyncCatalogsSearchClient):
             else:
                 datetime_str = datetime.isoformat()
 
-        parsed_filter = _parse_cql2_filter(filter_expr, filter_lang)
+        parsed_filter = parse_cql2_filter(filter_expr, filter_lang)
         if parsed_filter and self.core_client:
             # Same check as /search when VALIDATE_QUERYABLES is on.
             await self.core_client.queryables_cache.validate(
@@ -1412,7 +1378,7 @@ class CatalogsClient(AsyncBaseCatalogsClient, AsyncCatalogsSearchClient):
             token=token,
             request=request,
             resource_type=type,
-            filter=_parse_cql2_filter(filter_expr, filter_lang),
+            filter=parse_cql2_filter(filter_expr, filter_lang),
         )
 
         children = []

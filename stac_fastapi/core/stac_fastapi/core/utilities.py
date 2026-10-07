@@ -9,6 +9,10 @@ import os
 import re
 from typing import Any
 
+import orjson
+from fastapi import HTTPException
+
+from stac_fastapi.core.extensions.filter import CQL2TextError, cql2_text_to_json
 from stac_fastapi.types.stac import Item
 
 MAX_LIMIT = 10000
@@ -456,3 +460,57 @@ def format_conflict_errors(conflicts: list[dict]) -> dict[str, str]:
         else:
             conflict_details[doc_id] = f"Item '{doc_id}' already exists"
     return conflict_details
+
+
+def parse_cql2_filter(
+    filter_expr: str | dict[str, Any] | None, filter_lang: str | None
+) -> dict[str, Any] | None:
+    """Parse the filter and filter-lang parameters into CQL2 JSON.
+
+    A dict is CQL2 JSON already. With filter-lang cql2-json a string is CQL2
+    JSON. With cql2-text or no filter-lang, a string that parses as JSON is
+    CQL2 JSON and any other string is CQL2 text. Query parameters arrive
+    percent-decoded; decoding again would corrupt LIKE patterns like "%banks%".
+
+    Args:
+        filter_expr: The filter parameter.
+        filter_lang: The filter-lang parameter.
+
+    Returns:
+        The filter as CQL2 JSON, or None if there is no filter.
+
+    Raises:
+        HTTPException: 400 if filter-lang is not cql2-json or cql2-text, if the
+            filter does not parse, or if it is not a CQL2 expression object.
+    """
+    if not filter_expr:
+        return None
+    if filter_lang not in (None, "cql2-json", "cql2-text"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Only 'cql2-json' and 'cql2-text' filter languages are supported. Got '{filter_lang}'.",
+        )
+    parsed: Any = filter_expr
+    if isinstance(filter_expr, str):
+        try:
+            parsed = orjson.loads(filter_expr)
+        except orjson.JSONDecodeError:
+            if filter_lang == "cql2-json":
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid filter parameter: expected valid CQL2 JSON.",
+                )
+            try:
+                parsed = cql2_text_to_json(filter_expr)
+            except CQL2TextError as e:
+                raise HTTPException(
+                    status_code=400, detail=f"Invalid filter parameter: {e}."
+                )
+    # The translator needs an operator: a bare TRUE or FALSE, or JSON that is
+    # not an object, would be ignored or fail in the database layer.
+    if not isinstance(parsed, dict):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid filter parameter: expected a CQL2 expression with an operator.",
+        )
+    return parsed
