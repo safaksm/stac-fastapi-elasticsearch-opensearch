@@ -363,17 +363,18 @@ class EsAsyncBaseAggregationClient(AsyncBaseAggregationClient):
             search = self.database.apply_collections_filter(
                 search=search, collection_ids=aggregate_request.collections
             )
+            path_collection_id = collection_id
             # validate that aggregations are supported for all collections
-            for col in aggregate_request.collections:
+            for collection_id in aggregate_request.collections:
                 try:
                     aggregation_info = await self.get_aggregations(
-                        collection_id=col, request=request
+                        collection_id=collection_id, request=request
                     )
                 except NotFoundError:
-                    if collection_id:  # /collections/{collection_id}/aggregate
+                    if path_collection_id:  # /collections/{collection_id}/aggregate
                         raise
                     # like /search, skip a missing collection; it has no index to search
-                    collections = [c for c in collections if c != col]
+                    collections = [c for c in collections if c != collection_id]
                     continue
                 supported_aggregations = (
                     aggregation_info["aggregations"] + self.DEFAULT_AGGREGATIONS
@@ -383,7 +384,7 @@ class EsAsyncBaseAggregationClient(AsyncBaseAggregationClient):
                     if agg_name not in set([x["name"] for x in supported_aggregations]):
                         raise HTTPException(
                             status_code=400,
-                            detail=f"Aggregation {agg_name} not supported by collection {col}",
+                            detail=f"Aggregation {agg_name} not supported by collection {collection_id}",
                         )
         if supported_aggregations is None:  # no collection named, or none exists
             # Validate that the aggregations requested are supported by the catalog
@@ -488,7 +489,7 @@ class EsAsyncBaseAggregationClient(AsyncBaseAggregationClient):
                     {
                         "rel": "self",
                         "type": "application/json",
-                        "href": urljoin(collection_endpoint + "/", "aggregate"),
+                        "href": urljoin(collection_endpoint, "aggregate"),
                     },
                 ]
             )
